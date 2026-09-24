@@ -2,10 +2,13 @@ const nodemailer = require('nodemailer');
 
 const sendEmail = async (options) => {
   try {
-
-    // console.log("SMTPDetails");
-    // console.log("USER: ", process.env.EMAIL_USER);
-    // console.log("UserPassword: ", process.env.EMAIL_PASS);
+    // There is deliberately no fallback password. A literal here -- twice
+    // leaked into git history under two different values -- meant EMAIL_PASS
+    // rotation didn't actually stop mail going out under the old password.
+    if (!process.env.EMAIL_PASS) {
+      console.error('[Email] EMAIL_PASS is not set -- refusing to send.');
+      return { success: false, error: 'Email is not configured.' };
+    }
 
     // Create transporter
     const transporter = nodemailer.createTransport({
@@ -14,7 +17,7 @@ const sendEmail = async (options) => {
       secure: false, // true for 465, false for other ports
       auth: {
         user: process.env.EMAIL_USER || "bitplay.global@gmail.com",
-        pass: process.env.EMAIL_PASS || "elwtmfjrhgchbkpf"
+        pass: process.env.EMAIL_PASS
       }
     });
 
