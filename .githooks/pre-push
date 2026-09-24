@@ -1,0 +1,3 @@
+#!/bin/sh
+# Same checks as pre-commit, again at push time.
+exec sh scripts/security-checks.sh
