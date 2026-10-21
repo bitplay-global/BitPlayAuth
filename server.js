@@ -89,7 +89,12 @@ app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
 
-const server = app.listen(PORT, () => {
+// Only reachable through nginx on this machine (HTTPS, real client IP,
+// blocklist). It used to listen on every interface, so http://<ip>:5000
+// bypassed all of that. Set HOST=0.0.0.0 only if that is really wanted.
+const HOST = process.env.HOST || "127.0.0.1";
+
+const server = app.listen(PORT, HOST, () => {
   console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
 });
 
