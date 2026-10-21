@@ -116,7 +116,10 @@ const userSchema = new mongoose.Schema({
   emailVerificationToken: String,
   emailVerificationExpire: Date,
   emailVerificationOTP: String,
-  emailVerificationOTPExpire: Date
+  emailVerificationOTPExpire: Date,
+  // Set when the emailed code is verified (verify-email-otp); only then may
+  // PUT /resetpassword change the password, once, within the window.
+  passwordResetAllowedUntil: { type: Date, select: false },
 }, {
   timestamps: true
 });

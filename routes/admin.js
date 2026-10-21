@@ -5,18 +5,20 @@ const auth = require('../middleware/auth');
 const router = express.Router();
 
 // Admin middleware - simple check for now
+// This API had no authentication at all: anyone could list, read, deactivate
+// or delete users (exploited 2026-10-21). Nothing in the app or the dashboard
+// uses it, so it is closed unless AUTH_ADMIN_API_KEY is set on the server and
+// sent as the X-Admin-Key header (compared in constant time).
+const crypto = require('crypto');
 const adminAuth = (req, res, next) => {
-  // For now, just check if user is authenticated
-  // In production, you'd check for admin role
-  if (req.user) {
-    next();
-  } else {
-    res.status(401).json({
-      success: false,
-      message: 'Admin access required'
-    });
-  }
+  const expected = process.env.AUTH_ADMIN_API_KEY || '';
+  const given = String(req.get('x-admin-key') || '');
+  const ok = expected.length >= 32 && given.length === expected.length
+    && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+  if (!ok) return res.status(404).json({ success: false, message: 'Route not found' });
+  next();
 };
+router.use(adminAuth);
 
 // Get dashboard statistics
 router.get('/dashboard', async (req, res) => {

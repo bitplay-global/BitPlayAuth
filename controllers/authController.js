@@ -328,7 +328,7 @@ exports.forgotPassword = async (req, res, next) => {
       });
     }
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: String(email).trim().toLowerCase() });
 
     if (!user) {
       return res.status(404).json({
@@ -391,25 +391,37 @@ exports.forgotPassword = async (req, res, next) => {
 // @access  Public
 exports.resetPassword = async (req, res, next) => {
   try {
-    // Get hashed token
-    const user = await User.findOne({
-      email: req.params.resettoken
-    });
+    // The path carries the account email (that is what the app sends). Until
+    // 2026-10-21 that was all it took: anyone could set any account's
+    // password from its email alone. Now the emailed code must have been
+    // verified for this email in the last 15 minutes (verifyEmailOTP opens
+    // the window), and the window is single use.
+    const accountEmail = String(req.params.resettoken || '').trim().toLowerCase();
+    const user = await User.findOne({ email: accountEmail }).select('+passwordResetAllowedUntil');
 
-    if (!user) {
+    if (!user || !user.passwordResetAllowedUntil || user.passwordResetAllowedUntil.getTime() < Date.now()) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid or expired OTP'
+        message: 'Invalid or expired OTP. Please request a new code.'
+      });
+    }
+    if (typeof req.body.password !== 'string' || req.body.password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 6 characters'
       });
     }
 
     // Set new password
     user.password = req.body.password;
+    user.passwordResetAllowedUntil = undefined;
     user.resetPasswordToken = undefined;
     user.resetPasswordExpire = undefined;
     await user.save();
 
-    sendTokenResponse(user, 200, res);
+    // No login token here: the app sends the user to the login screen, and
+    // handing one out would also skip two-factor authentication.
+    res.status(200).json({ success: true, message: 'Password updated. Please log in.' });
   } catch (error) {
     console.error('Reset password error:', error);
     res.status(500).json({
@@ -636,23 +648,39 @@ exports.verifyEmailOTP = async (req, res, next) => {
     //   });
     // }
 
-    // Original OTP validation (for production)
-    const user = await User.findOne({
-      emailVerificationOTP: otp,
-      emailVerificationOTPExpire: { $gt: Date.now() }
-    });
+    // The code must belong to THIS email. It used to be looked up by code
+    // alone, so a guessed code verified whichever account held it.
+    const accountEmail = String(email || '').trim().toLowerCase();
+    const code = String(otp || '');
+    const holder = await User.findOne({ email: accountEmail }).select('+otpFailedAttempts');
+    if (holder && (holder.otpFailedAttempts || 0) >= MAX_OTP_ATTEMPTS) {
+      return res.status(429).json({
+        success: false,
+        message: 'Too many incorrect attempts. Please request a new code.'
+      });
+    }
+    const user = holder
+      && holder.emailVerificationOTP === code
+      && holder.emailVerificationOTPExpire
+      && holder.emailVerificationOTPExpire.getTime() > Date.now()
+      ? holder : null;
 
     if (!user) {
+      if (holder) await User.updateOne({ _id: holder._id }, { $inc: { otpFailedAttempts: 1 } });
       return res.status(400).json({
         success: false,
         message: 'Invalid or expired OTP'
       });
     }
 
-    // Set email as verified
+    // Set email as verified. A correct code also proves control of the
+    // mailbox, which is what a password reset needs: open a short window
+    // in which PUT /resetpassword may set a new password, once.
     user.emailVerified = true;
     user.emailVerificationOTP = undefined;
     user.emailVerificationOTPExpire = undefined;
+    user.otpFailedAttempts = 0;
+    user.passwordResetAllowedUntil = new Date(Date.now() + 15 * 60 * 1000);
     await user.save();
 
     res.status(200).json({
@@ -760,8 +788,15 @@ exports.updateemailotp = async (req, res, next) => {
         message: 'Please provide an email address'
       });
     }
+    const newEmail = String(new_email || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+      return res.status(400).json({ success: false, message: 'Please provide a valid new email address' });
+    }
+    if (await User.exists({ email: newEmail })) {
+      return res.status(400).json({ success: false, message: 'That email address is already in use' });
+    }
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: String(email).trim().toLowerCase() });
 
     if (!user) {
       return res.status(404).json({
@@ -777,11 +812,15 @@ exports.updateemailotp = async (req, res, next) => {
 
     const message = `You are receiving this email because you have requested to change email`;
 
+    // The code goes to the CURRENT address: whoever changes the email must
+    // control the account's mailbox. It used to go to the new address, which
+    // anyone could choose, so any account's email could be taken over.
     const htmlMessage = `
       <h1>Email Change Request</h1>
-      <p>You are receiving this email because you have requested to update email.</p>
-      
-      <p>If you did not request this, please ignore this email and your password will remain unchanged.</p>
+      <p>A request was made to change your BitPlay email to ${newEmail.replace(/[<>&"]/g, '')}.</p>
+      <p>Please use the code below to confirm:</p>
+      <p>${UpdateOTP}</p>
+      <p>If you did not request this, ignore this email: your email will not change.</p>
       <p>This code will expire in 10 minutes.</p>
     `;
 
@@ -806,12 +845,6 @@ exports.updateemailotp = async (req, res, next) => {
         html: htmlMessage
       });
 
-      await sendEmail({
-        email: new_email,
-        subject: 'Update User Email',
-        NewMessage,
-        html: NewHtmlMessage
-      });
 
       res.status(200).json({
         success: true,
@@ -881,12 +914,17 @@ exports.updateemail = async (req, res, next) => {
       });
     }
 
+    const newEmail = String(new_email || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail) || await User.exists({ email: newEmail })) {
+      return res.status(400).json({ success: false, message: 'That email address is invalid or already in use' });
+    }
+
     try {
       // Single use: the code must not work a second time.
       user.emailVerificationOTP = undefined;
       user.emailVerificationOTPExpire = undefined;
       user.otpFailedAttempts = 0;
-      user.email = new_email;
+      user.email = newEmail;
       user.resetPasswordToken = undefined;
       user.resetPasswordExpire = undefined;
 

@@ -14,6 +14,11 @@ connectDB();
 
 const app = express();
 
+// Behind nginx on the same machine: take the client IP from X-Forwarded-For
+// (nginx sets it), otherwise every user shares 127.0.0.1 and one rate-limit
+// bucket.
+app.set('trust proxy', 'loopback');
+
 // Security middleware
 app.use(helmet());
 
@@ -40,6 +45,22 @@ app.use(limiter);
 // Body parser
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// Refuse MongoDB operators smuggled into queries, e.g. a login body
+// {"email": {"$ne": null}} or ?email[$regex]=^a.
+app.use(require('./middleware/noOperatorInjection'));
+
+// Tighter limits on the endpoints that check secrets or send email.
+const strictLimiter = (max) => rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many attempts. Please wait a few minutes and try again.' }
+});
+app.use(['/api/auth/login', '/api/auth/social-login'], strictLimiter(30));
+app.use(['/api/auth/forgotpassword', '/api/auth/resend-verification', '/api/auth/update-email-otp', '/api/auth/two-factor-otp'], strictLimiter(10));
+app.use(['/api/auth/verify-email-otp', '/api/auth/verify-twofactorotp', '/api/auth/update-email', '/api/auth/resetpassword', '/api/auth/register'], strictLimiter(20));
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
