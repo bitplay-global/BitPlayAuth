@@ -180,6 +180,17 @@ exports.login = async (req, res, next) => {
       });
     }
 
+    // A suspended (or deactivated) account cannot sign in. Checked before the
+    // password so a suspended user gets a clear message rather than a hint
+    // about whether the password was right.
+    if (user.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        code: 'ACCOUNT_SUSPENDED',
+        message: 'This account has been suspended. Please contact support.'
+      });
+    }
+
     // Check if password matches
     const isMatch = await user.matchPassword(password);
 
@@ -563,6 +574,14 @@ exports.socialLogin = async (req, res, next) => {
         referralUsed: used_referral,
         isActive: true,
         emailVerified: true // Social logins are pre-verified
+      });
+    }
+
+    if (user.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        code: 'ACCOUNT_SUSPENDED',
+        message: 'This account has been suspended. Please contact support.'
       });
     }
 
