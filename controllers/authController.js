@@ -2,6 +2,19 @@ const crypto = require('crypto');
 
 // A 6-digit code allows 1,000,000 guesses; stop after a handful.
 const MAX_OTP_ATTEMPTS = 5;
+
+// Records which app version a user signs in from (users.app), the same shape
+// the backend's middleware/appVersionTracker.js writes on API calls.
+async function recordAppVersion(req, user) {
+  try {
+    const clean = (v, max = 40) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+    const version = clean(req.get('x-app-version'));
+    if (!version || !user?._id) return;
+    await User.updateOne({ _id: user._id }, { $set: { app: {
+      platform: clean(req.get('x-app-platform'), 10) || null, version, build: clean(req.get('x-app-build'), 20) || null, lastSeenAt: new Date(),
+    } } });
+  } catch { /* bookkeeping only */ }
+}
 // How many 2FA-verified login sessions an account keeps at once.
 const MAX_VERIFIED_SESSIONS = 10;
 const User = require('../models/User');
@@ -208,6 +221,7 @@ exports.login = async (req, res, next) => {
     user.lastLogin = new Date();
     await user.save();
 
+    recordAppVersion(req, user);
     sendTokenResponse(user, 200, res, {}, tokenOptions);
   } catch (error) {
     console.error('Login error:', error);
@@ -554,6 +568,7 @@ exports.socialLogin = async (req, res, next) => {
 
     // isNewUser lets the app offer a referral code to someone who signed up
     // through the Login screen, which has no referral field of its own.
+    recordAppVersion(req, user);
     sendTokenResponse(user, 200, res, { isNewUser });
   } catch (error) {
     console.error('Social login error:', error);
