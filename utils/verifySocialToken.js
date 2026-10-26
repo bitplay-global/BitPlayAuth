@@ -181,7 +181,9 @@ async function verifyGoogleToken({ idToken, accessToken }) {
   }
   // A token minted for some other app must not work here.
   if (!GOOGLE_CLIENT_IDS.includes(body.aud) && !GOOGLE_CLIENT_IDS.includes(body.azp)) {
-    throw new SocialVerificationError('Token was not issued for this app', 'BAD_AUDIENCE');
+    // Client ids are public; logging which one lets a legitimate build (for
+    // example a debug-signed one) be recognised and added to GOOGLE_CLIENT_IDS.
+    throw new SocialVerificationError(`Token was not issued for this app (aud ${body.aud || '-'}, azp ${body.azp || '-'})`, 'BAD_AUDIENCE');
   }
   const verified = body.email_verified === true || body.email_verified === 'true';
   return { email: body.email, emailVerified: verified, subject: body.sub };

@@ -496,7 +496,7 @@ exports.socialLogin = async (req, res, next) => {
     try {
       verified = await verifySocialIdentity({ provider, accessToken, idToken, firebaseIdToken });
     } catch (verifyErr) {
-      console.warn(`[SocialLogin] Rejected unverified sign-in (${provider}): ${verifyErr.code || verifyErr.message}`);
+      console.warn(`[SocialLogin] Rejected unverified sign-in (${provider}): ${verifyErr.code || ''} ${verifyErr.message}`);
       return res.status(401).json({
         success: false,
         message: 'We could not verify this sign-in. Please try again.',
@@ -560,21 +560,33 @@ exports.socialLogin = async (req, res, next) => {
       }
 
       // Create new user with social provider info
-      user = await User.create({
-        name: name || 'Social User',
-        email,
-        password: crypto.randomBytes(32).toString('hex'), // Random password for social users
-        photo,
-        socialProviders: {
-          [provider]: {
-            id: providerId,
-            accessToken: accessToken
-          }
-        },
-        referralUsed: used_referral,
-        isActive: true,
-        emailVerified: true // Social logins are pre-verified
-      });
+      try {
+        user = await User.create({
+          name: name || 'Social User',
+          email,
+          password: crypto.randomBytes(32).toString('hex'), // Random password for social users
+          photo,
+          socialProviders: {
+            [provider]: {
+              id: providerId,
+              accessToken: accessToken
+            }
+          },
+          referralUsed: used_referral,
+          isActive: true,
+          emailVerified: true // Social logins are pre-verified
+        });
+      } catch (createErr) {
+        // Two first sign-ins at the same moment (a double tap) both found no
+        // account and both tried to create it; the second used to fail with a
+        // duplicate-key 500. Use the account the first one created.
+        if (createErr && createErr.code === 11000) {
+          user = await User.findOne({ email });
+          if (!user) throw createErr;
+        } else {
+          throw createErr;
+        }
+      }
     }
 
     if (user.isActive === false) {
